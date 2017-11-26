@@ -1,10 +1,10 @@
 package filodb.spark
 
-import org.apache.spark.{SparkContext, SparkException, SparkConf}
-import org.apache.spark.sql.{SaveMode, SQLContext}
+import org.apache.spark.{SparkConf, SparkContext, SparkException}
+import org.apache.spark.sql.{SQLContext, SaveMode, SparkSession}
 import org.scalatest.time.{Millis, Seconds, Span}
-import scala.concurrent.duration._
 
+import scala.concurrent.duration._
 import filodb.core._
 import filodb.core.metadata.{Column, DataColumn, Dataset}
 
@@ -16,13 +16,13 @@ class InMemoryStoreTest extends SparkTestBase {
   val currClassPath = sys.props("java.class.path")
 
   // Setup SQLContext and a sample DataFrame
-  val conf = (new SparkConf).setMaster("local[4]")
-                            .setAppName("test")
-                            .set("spark.filodb.store", "in-memory")
-                            .set("spark.filodb.memtable.min-free-mb", "10")
-                            .set("spark.ui.enabled", "false")
-  val sc = new SparkContext(conf)
-  val sql = new SQLContext(sc)
+    val sparkSession = SparkSession.builder().master("local[4]").appName("test")
+    .config("spark.filodb.store", "in-memory")
+    .config("spark.filodb.memtable.min-free-mb", "10")
+    .config("spark.ui.enabled", "false").getOrCreate()
+
+  val sc = sparkSession.sparkContext
+  val sql = sparkSession.sqlContext
   FiloDriver.init(sc)
 
   import filodb.core.GdeltTestData._
@@ -32,7 +32,7 @@ class InMemoryStoreTest extends SparkTestBase {
   val testProjections = Seq(dataset1.projections.head)
 
   it("should be able to write to InMemoryColumnStore with multi-column partition keys") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(records.toSeq).toDF()
     // Note: we need to sort to ensure all keys for a given partition key are on same node

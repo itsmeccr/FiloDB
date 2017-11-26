@@ -1,14 +1,12 @@
 package filodb.spark
 
 import java.sql.Timestamp
-import org.apache.spark.{SparkContext, SparkException, SparkConf}
 import org.apache.spark.sql.SaveMode
-import org.apache.spark.sql.hive.HiveContext
-import org.scalatest.time.{Millis, Seconds, Span}
 import scala.concurrent.duration._
 
 import filodb.core._
 import filodb.core.metadata.{Column, DataColumn, Dataset}
+import org.apache.spark.sql.SparkSession
 
 object SaveAsFiloTest {
   case class TSData(machine: String, metric: Double, time: Timestamp)
@@ -28,14 +26,19 @@ class SaveAsFiloTest extends SparkTestBase {
   //   PatienceConfig(timeout = Span(15, Seconds), interval = Span(250, Millis))
 
   // Setup SQLContext and a sample DataFrame
-  val conf = (new SparkConf).setMaster("local[4]")
-                            .setAppName("test")
-                            .set("spark.filodb.cassandra.keyspace", "unittest")
-                            .set("spark.filodb.cassandra.admin-keyspace", "unittest")
-                            .set("spark.filodb.memtable.min-free-mb", "10")
-                            .set("spark.ui.enabled", "false")
-  val sc = new SparkContext(conf)
-  val sql = new HiveContext(sc)
+
+  val sparkSession = SparkSession.builder().master("local[4]")
+    .appName("test")
+    .config("spark.filodb.cassandra.keyspace", "unittest")
+    .config("spark.filodb.cassandra.admin-keyspace", "unittest")
+    .config("spark.filodb.memtable.min-free-mb", "10")
+    .config("spark.ui.enabled", "false")
+//    .enableHiveSupport()
+    .getOrCreate()
+  val sc = sparkSession.sparkContext
+  val sql = sparkSession.sqlContext
+
+  import sparkSession.implicits._
 
   val segCol = ":string 0"
   val partKeys = Seq(":string part0")
@@ -66,7 +69,7 @@ class SaveAsFiloTest extends SparkTestBase {
 
     // Now read stuff back and ensure it got written
     val df = sql.filoDataset("gdelt1")
-    df.select(count("id")).collect().head(0) should equal (3)
+    df.select(count("id")).collect().head should equal (3)
     df.agg(sum("year")).collect().head(0) should equal (4030)
     val row = df.select("id", "sqlDate", "monthYear").limit(1).collect.head
     row(0) should equal (0)
@@ -134,7 +137,7 @@ class SaveAsFiloTest extends SparkTestBase {
 
     // Now read stuff back and ensure it got written
     val df = sql.filoDataset("gdelt1")
-    df.select(count("id")).collect().head(0) should equal (3)
+    df.select(count("id")).collect().head should equal (3)
   }
 
   it("should throw error in ErrorIfExists mode if dataset already exists") {
@@ -246,8 +249,8 @@ class SaveAsFiloTest extends SparkTestBase {
 
     val gdelt1 = sql.filoDataset("gdelt1")
     val gdelt2 = sql.filoDataset("gdelt2")
-    gdelt1.registerTempTable("gdelt1")
-    gdelt2.registerTempTable("gdelt2")
+    gdelt1.createOrReplaceTempView("gdelt1")
+    gdelt2.createOrReplaceTempView("gdelt2")
     sql.sql("INSERT INTO table gdelt2 SELECT * FROM gdelt1").count()
     gdelt2.agg(sum("year")).collect().head(0) should equal (8062)
   }
@@ -263,13 +266,13 @@ class SaveAsFiloTest extends SparkTestBase {
                  save()
     val df = sql.read.format("filodb.spark").option("dataset", "test1").load()
     df.agg(sum("id")).collect().head(0) should equal (3)
-    df.registerTempTable("test1")
+    df.createOrReplaceTempView("test1")
     sql.sql("SELECT sum(id) FROM test1 WHERE year = 2015").collect.head(0) should equal (2)
     sql.sql("SELECT count(*) FROM test1").collect.head(0) should equal (3)
   }
 
   it("should be able to write with multi-column partition keys") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -284,7 +287,7 @@ class SaveAsFiloTest extends SparkTestBase {
   }
 
   it("should be able to parse and use partition filters in queries") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -295,7 +298,7 @@ class SaveAsFiloTest extends SparkTestBase {
                  mode(SaveMode.Overwrite).
                  save()
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where actor2Code in ('JPN', 'KHM')").collect().
       head(0) should equal (30)
     sql.sql("select sum(numArticles) from gdelt where actor2Code = 'JPN' AND year = 1979").collect().
@@ -303,7 +306,7 @@ class SaveAsFiloTest extends SparkTestBase {
   }
 
   it("should be able to parse and use partition filters even if partition has computed column") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -314,7 +317,7 @@ class SaveAsFiloTest extends SparkTestBase {
                  mode(SaveMode.Overwrite).
                  save()
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where actor2Code in ('JPN', 'KHM')").collect().
       head(0) should equal (30)
     sql.sql("select sum(numArticles) from gdelt where actor2Code = 'JPN' AND year = 1979").collect().
@@ -322,7 +325,7 @@ class SaveAsFiloTest extends SparkTestBase {
   }
 
   it("should be able to parse and use single partition query ") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -333,13 +336,13 @@ class SaveAsFiloTest extends SparkTestBase {
       mode(SaveMode.Overwrite).
       save()
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where actor2Code = 'JPN' AND year = 1979").collect().
       head(0) should equal (10)
   }
 
   it("should be able to parse and use multipartition query") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -350,13 +353,13 @@ class SaveAsFiloTest extends SparkTestBase {
       mode(SaveMode.Overwrite).
       save()
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where actor2Code in ('JPN', 'KHM')").collect().
       head(0) should equal (30)
   }
 
   it("should be able to filter by segment key and multiple partitions") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -369,14 +372,14 @@ class SaveAsFiloTest extends SparkTestBase {
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
     df.agg(sum("numArticles")).collect().head(0) should equal (492)
 
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where year=1979 " +
       "and  actor2Code in ('JPN', 'KHM')  and eventId >= 21 AND eventId <= 24").collect().
       head(0) should equal (21)
   }
 
   it("should be able do full table scan when all partition keys are not part of the filters") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -387,13 +390,13 @@ class SaveAsFiloTest extends SparkTestBase {
       mode(SaveMode.Overwrite).
       save()
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where actor2Code ='JPN'  ").collect().
       head(0) should equal (10)
   }
 
   it("should be able to write with multi-column row keys and filter by segment key") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -405,13 +408,13 @@ class SaveAsFiloTest extends SparkTestBase {
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
     df.agg(sum("numArticles")).collect().head(0) should equal (492)
 
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where eventId >= 78 AND eventId <= 85").collect().
       head(0) should equal (15)
   }
 
   it("should be able to write with multi-column row keys and filter by segment key equals") {
-    import sql.implicits._
+    import sparkSession.implicits._
 
     val gdeltDF = sc.parallelize(GdeltTestData.records.toSeq).toDF()
     gdeltDF.write.format("filodb.spark").
@@ -423,13 +426,13 @@ class SaveAsFiloTest extends SparkTestBase {
     val df = sql.read.format("filodb.spark").option("dataset", "gdelt3").load()
     df.agg(sum("numArticles")).collect().head(0) should equal (492)
 
-    df.registerTempTable("gdelt")
+    df.createOrReplaceTempView("gdelt")
     sql.sql("select sum(numArticles) from gdelt where eventId = 21").collect().
       head(0) should equal (10)
   }
 
   it("should be able to ingest Spark Timestamp columns and query them") {
-    import sql.implicits._
+    import sparkSession.implicits._
     val tsDF = sc.parallelize(SaveAsFiloTest.timeseries).toDF()
     tsDF.write.format("filodb.spark").
                option("dataset", "test1").

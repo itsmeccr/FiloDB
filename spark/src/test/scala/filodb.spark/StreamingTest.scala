@@ -1,19 +1,18 @@
 package filodb.spark
 
 import com.typesafe.config.ConfigFactory
-import org.apache.spark.{SparkContext, SparkException, SparkConf}
+import org.apache.spark.{SparkConf, SparkContext, SparkException}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{SaveMode, SQLContext}
+import org.apache.spark.sql.{SQLContext, SaveMode, SparkSession}
 import org.apache.spark.streaming.{Milliseconds, StreamingContext}
 import org.scalatest.time.{Millis, Seconds, Span}
+
 import scala.collection.mutable
 import scala.concurrent.duration._
-
 import filodb.core._
 import filodb.core.metadata.{Column, Dataset}
 import filodb.core.store.SegmentSpec
-
-import org.scalatest.{FunSpec, BeforeAndAfter, BeforeAndAfterAll, Matchers}
+import org.scalatest.{BeforeAndAfter, BeforeAndAfterAll, FunSpec, Matchers}
 import org.scalatest.concurrent.ScalaFutures
 
 case class NameRecord(first: Option[String], last: Option[String],
@@ -27,14 +26,14 @@ with Matchers with ScalaFutures {
     PatienceConfig(timeout = Span(10, Seconds), interval = Span(50, Millis))
 
   // Setup SQLContext and a sample DataFrame
-  val conf = (new SparkConf).setMaster("local[4]")
-                            .setAppName("test")
-                            .set("spark.filodb.cassandra.keyspace", "unittest")
-                            .set("spark.filodb.cassandra.admin-keyspace", "unittest")
-                            .set("spark.filodb.memtable.min-free-mb", "10")
-                            .set("spark.ui.enabled", "false")
-  val ssc = new StreamingContext(conf, Milliseconds(700))
-  val sql = new SQLContext(ssc.sparkContext)
+  val sparkSession = SparkSession.builder().master("local[4]").appName("test")
+    .config("spark.filodb.cassandra.keyspace", "unittest")
+    .config("spark.filodb.cassandra.admin-keyspace", "unittest")
+    .config("spark.filodb.memtable.min-free-mb", "10")
+    .config("spark.ui.enabled", "false").getOrCreate()
+
+  val ssc = new StreamingContext(sparkSession.sparkContext, Milliseconds(700))
+  val sql = sparkSession.sqlContext
 
   // This is the same code that the Spark stuff uses.  Make sure we use exact same environment as real code
   // so we don't have two copies of metaStore that could be configured differently.
@@ -94,6 +93,6 @@ with Matchers with ScalaFutures {
 
     // Now, read back the names to make sure they were all written
     val df = sql.read.format("filodb.spark").option("dataset", largeDataset.name).load()
-    df.select(count("age")).collect.head(0) should equal (lotLotNames.length)
+    df.select(count("age")).collect.head should equal (lotLotNames.length)
   }
 }

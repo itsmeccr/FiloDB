@@ -1,12 +1,11 @@
 package filodb.stress
 
-import org.apache.spark.{SparkContext, SparkConf}
-import org.apache.spark.sql.{DataFrame, SaveMode, SQLContext}
-import scala.util.Random
+import filodb.spark._
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
+
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
-
-import filodb.spark._
+import scala.util.Random
 
 /**
  * An in-memory concurrency and query stress tester
@@ -25,7 +24,7 @@ object InMemoryQueryStress extends App {
   def puts(s: String): Unit = {
     //scalastyle:off
     println(s)
-    //scalastyle:on
+    // scalastyle:on
   }
 
   // Queries
@@ -51,16 +50,17 @@ object InMemoryQueryStress extends App {
 
   val allQueries = singleDriverQueries
 
-  // Setup SparkContext, etc.
-  val conf = (new SparkConf).setMaster("local[8]")
-                            .setAppName("test")
-                            .set("spark.filodb.store", "in-memory")
-                            .set("spark.sql.shuffle.partitions", "4")
-                            .set("spark.scheduler.mode", "FAIR")
-                            .set("spark.ui.enabled", "false")   // No need for UI when doing perf stuff
-                            .set("spark.filodb.memtable.min-free-mb", "50")
-  val sc = new SparkContext(conf)
-  val sql = new SQLContext(sc)
+  val sparkSession = SparkSession.builder()
+    .master("local[8]")
+    .appName("test")
+    .config("spark.filodb.store", "in-memory")
+    .config("spark.sql.shuffle.partitions", "4")
+    .config("spark.scheduler.mode", "FAIR")
+    .config("spark.ui.enabled", "false")   // No need for UI when doing perf stuff
+    .config("spark.filodb.memtable.min-free-mb", "50").getOrCreate()
+
+  val sc = sparkSession.sparkContext
+  val sql = sparkSession.sqlContext
 
   // Ingest file - note, this will take several minutes
   puts("Starting ingestion...")
@@ -76,7 +76,7 @@ object InMemoryQueryStress extends App {
   puts("Ingestion done.")
 
   val taxiDF = sql.filoDataset("nyc_taxi")
-  taxiDF.registerTempTable("nyc_taxi")
+  taxiDF.createOrReplaceTempView("nyc_taxi")
   val numRecords = taxiDF.count()
   puts(s"Ingested $numRecords records")
 
